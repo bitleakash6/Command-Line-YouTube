@@ -2,6 +2,17 @@ import yt_dlp as youtube_dl
 import os
 import platform
 import setup
+import mysql.connector
+
+# Database connection details
+db_config = {
+    'user': 'your_username',
+    'password': 'your_password',
+    'host': 'localhost',
+    'database': 'ytcli_db'
+}
+
+# Determine the OS and set appropriate commands
 osname = platform.system()
 mpv = ""
 pip = ""
@@ -11,49 +22,53 @@ if osname == "Linux":
     pip = "pip3"
     clear = "clear"
 elif osname == "Windows":
-    mpv = ".\mpv"
+    mpv = ".\\mpv"
     pip = "pip"
     clear = "cls"
 
-# Importing and installing dependencies
+# Import and install dependencies
 try:
     from youtubesearchpython import VideosSearch
     from pytube import Playlist
-    import sqlite3
-    hasmpv = len(os.popen(mpv+" --version").read())
-    haspip = len(os.popen(pip+" --version").read())
+    hasmpv = len(os.popen(mpv + " --version").read())
+    haspip = len(os.popen(pip + " --version").read())
     if hasmpv == 0 or haspip == 0:
         raise Exception
 except:
-    setup.install(osname)
+    setup.install()
     from youtubesearchpython import VideosSearch
     from pytube import Playlist
-    import sqlite3
 
 # To manipulate data in database
-def change(query, data=[]):
-    con = sqlite3.connect("playlist.db")
+def change(query, data=None):
+    con = mysql.connector.connect(**db_config)
     cur = con.cursor()
-    if len(data) == 0:
+    if data is None:
         cur.execute(query)
     else:
-        # for queries having many attribute values to insert
         cur.executemany(query, data)
     con.commit()
+    cur.close()
+    con.close()
 
 # To fetch data from database
-def fetch(query):
-    con = sqlite3.connect("playlist.db")
+def fetch(query, data=None):
+    con = mysql.connector.connect(**db_config)
     cur = con.cursor()
-    res = cur.execute(query)
-    li = res.fetchall()
+    if data is None:
+        cur.execute(query)
+    else:
+        cur.execute(query, data)
+    li = cur.fetchall()
+    cur.close()
+    con.close()
     return li
 
 # To display menu
 def menu(title, options):
     os.system(clear)
     for i, val in enumerate(options):
-        print(str(i+1) + "\t" + val)
+        print(str(i + 1) + "\t" + val)
     print("\q\tBack")
     choice = input(title)
     os.system(clear)
@@ -63,7 +78,6 @@ def menu(title, options):
 
 # To search for a particular song
 def search():
-    s = ''
     while True:
         s = input("Search: ")
         if s == "\q":
@@ -78,13 +92,13 @@ def search():
             for i in r["result"]:
                 title = i["title"][:40]
                 if len(title) < 40:
-                    title = title + " "*(40 - len(title))
+                    title = title + " " * (40 - len(title))
                 duration = i["duration"]
                 views = i["viewCount"]["short"]
                 disp_li.append("{0}\t\t\t{1}\t\t{2}".format(title, duration, views))
                 li.append(i["link"])
 
-            # sending data to display search details
+            # Sending data to display search details
             play(disp_li, li)
 
 # To prompt the user to select a song
@@ -94,59 +108,42 @@ def play(disp_li, li):
         return
     else:
         choice = menu(title="Enter your choice: ", options=["Audio only mode", "Regular Mode"])[0]
-        print(disp_li[int(music)-1])
-        print("\n", li[int(music)-1], "\n")
+        if choice == "\q":
+            return
+        print(disp_li[int(music) - 1])
+        print("\n", li[int(music) - 1], "\n")
         if choice == "1":
-            command = mpv+" {0} --no-video".format(li[int(music)-1])
+            command = mpv + " {0} --no-video".format(li[int(music) - 1])
         elif choice == "2":
-            command = mpv+" {0}".format(li[int(music)-1])
-        else:
-            return ""
+            command = mpv + " {0}".format(li[int(music) - 1])
         os.system(command)
-           
-# To add new playlist
+
+# To add a new playlist
 def addPlaylist():
     os.system(clear)
-    name = input("Enter playlist name:")
-    link = input("Enter url:")
-    query = "CREATE TABLE IF NOT EXISTS Playlist(id, name, link)"
+    name = input("Enter playlist name: ")
+    link = input("Enter url: ")
+    query = "CREATE TABLE IF NOT EXISTS Playlist(id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), link TEXT)"
     change(query)
-    query = "SELECT id FROM Playlist"
-    id = 0
-    li = fetch(query)
-
-    # Setting playlist id
-    if len(li) == 0:
-        id = 1
-    else:
-        # id will be stored as str but converting to int for usage
-        id = int(max(li)[0]) + 1
-
-    data = [(str(id), name, link)]
-    query = "INSERT INTO Playlist VALUES(?, ?, ?)"
+    data = [(name, link)]
+    query = "INSERT INTO Playlist(name, link) VALUES(%s, %s)"
     change(query, data)
 
 # To prompt the user to select a playlist
 def getPlaylist():
     query = "SELECT name FROM Playlist"
     li = fetch(query)
-    res = True
-    # Prompt user to add new playlist if there are no existing playlist saved
     if len(li) == 0:
+        print("No playlists found. Please add a playlist first.")
         addPlaylist()
         li = fetch(query)
-        res = False
-
-    disp_li = []
-    for i in li:
-        disp_li.append(" ".join(i))
-        
-    # displays playlist menu
+    
+    disp_li = [item[0] for item in li]
     playlist = menu(title="Choose playlist: ", options=disp_li)[1]
     if playlist == "Back":
         return False
-    query = "SELECT link FROM Playlist WHERE name='"+playlist+"'"
-    li = fetch(query)
+    query = "SELECT link FROM Playlist WHERE name=%s"
+    li = fetch(query, (playlist,))
     url = li[0][0]
     return url
 
@@ -155,8 +152,8 @@ def delPlaylist():
     link = getPlaylist()
     if link == False:
         return
-    query = "DELETE FROM Playlist WHERE link='"+link + "'"  # deleting playlist record from database
-    change(query)
+    query = "DELETE FROM Playlist WHERE link=%s"  # Deleting playlist record from database
+    change(query, [(link,)])
 
 if __name__ == "__main__":
     while(True):
